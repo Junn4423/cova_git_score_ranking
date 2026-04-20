@@ -11,6 +11,11 @@ import {
 } from "@ant-design/icons";
 
 import DashboardPage from "./pages/DashboardPage";
+import DevelopersPage from "./pages/DevelopersPage";
+import DeveloperDetailPage from "./pages/DeveloperDetailPage";
+import RepositoriesPage from "./pages/RepositoriesPage";
+import RepositoryDetailPage from "./pages/RepositoryDetailPage";
+import PullRequestsPage from "./pages/PullRequestsPage";
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title } = Typography;
@@ -28,6 +33,16 @@ function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { token: themeToken } = theme.useToken();
+
+  // Determine active menu key based on current path
+  const getSelectedKey = () => {
+    const path = location.pathname;
+    if (path.startsWith("/developers")) return "/developers";
+    if (path.startsWith("/repositories")) return "/repositories";
+    if (path.startsWith("/pull-requests")) return "/pull-requests";
+    if (path.startsWith("/admin")) return "/admin";
+    return "/";
+  };
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -59,7 +74,7 @@ function AppLayout() {
         <Menu
           theme="dark"
           mode="inline"
-          selectedKeys={[location.pathname]}
+          selectedKeys={[getSelectedKey()]}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
           style={{ borderRight: 0 }}
@@ -81,7 +96,7 @@ function AppLayout() {
             <Title level={4} style={{ margin: 0 }}>
               Engineering Contribution Analytics
             </Title>
-            <Tag color="blue">v0.1.0</Tag>
+            <Tag color="blue">v0.2.0</Tag>
           </Space>
         </Header>
         <Content
@@ -95,10 +110,12 @@ function AppLayout() {
         >
           <Routes>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/developers" element={<div>Developers (coming soon)</div>} />
-            <Route path="/repositories" element={<div>Repositories (coming soon)</div>} />
-            <Route path="/pull-requests" element={<div>Pull Requests (coming soon)</div>} />
-            <Route path="/admin" element={<div>Admin Settings (coming soon)</div>} />
+            <Route path="/developers" element={<DevelopersPage />} />
+            <Route path="/developers/:id" element={<DeveloperDetailPage />} />
+            <Route path="/repositories" element={<RepositoriesPage />} />
+            <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
+            <Route path="/pull-requests" element={<PullRequestsPage />} />
+            <Route path="/admin" element={<div>Admin Settings (coming in Week 6)</div>} />
           </Routes>
         </Content>
         <Footer style={{ textAlign: "center", color: themeToken.colorTextSecondary }}>
