@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.health import router as health_router
+from app.api.sync import router as sync_router
 
 app = FastAPI(
     title="Engineering Contribution Analytics",
@@ -25,3 +26,4 @@ app.add_middleware(
 
 # ── Routers ─────────────────────────────────────────────────
 app.include_router(health_router, tags=["Health"])
+app.include_router(sync_router)
