@@ -14,11 +14,13 @@ from app.api.repositories import router as repositories_router
 from app.api.pull_requests import router as pull_requests_router
 from app.api.work_items import router as work_items_router
 from app.api.scores import router as scores_router
+from app.api.analysis import router as analysis_router
+from app.api.admin import router as admin_router
 
 app = FastAPI(
     title="Engineering Contribution Analytics",
     description="Internal tool for analyzing developer contributions from GitHub",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 # CORS – allow the Vite dev server and any internal origin
@@ -39,3 +41,5 @@ app.include_router(repositories_router)
 app.include_router(pull_requests_router)
 app.include_router(work_items_router)
 app.include_router(scores_router)
+app.include_router(analysis_router)
+app.include_router(admin_router)

@@ -115,4 +115,3 @@ export const getDeveloperScore = (devId: number, params?: { period_days?: number
 
 export const getCommits = (params?: { repo_id?: number; limit?: number }) =>
   api.get("/api/sync/commits", { params });
-

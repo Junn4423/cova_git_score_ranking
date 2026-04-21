@@ -1,17 +1,12 @@
 """
-Scoring Engine V1 — calculates developer contribution scores.
+Scoring Engine V2 — calculates developer contribution scores.
 
 Formula: Contribution Score = 15% Activity + 50% Quality + 35% Impact
 
-Activity Score:
-  - active_days, merged_pr_count, review_count
-
-Quality Score:
-  - work_item_coherence, meaningful_change_ratio, message_quality_ratio
-
-Impact Score (V1 simplified):
-  - weighted by lines changed on non-generated/non-lockfile code
-  - bugfix weight (higher if commit messages mention fix/bug)
+V2 enhancements:
+  - Integrates AI analysis: message_alignment, complexity, change_type
+  - Complexity-weighted impact scoring
+  - Feature/bugfix/security bonuses from AI classification
 """
 
 import logging
@@ -25,7 +20,7 @@ from sqlalchemy import func, cast, Date
 
 from app.models.models import (
     Developer, Commit, CommitFile, PullRequest, Review,
-    WorkItem, WorkItemCommit,
+    WorkItem, WorkItemCommit, AICommitAnalysis,
     ScoreSnapshot, ScoreBreakdown, AppConfig,
 )
 
@@ -95,10 +90,14 @@ class ScoringEngine:
             logger.info("No commits for %s in period", dev.github_login)
             return None
 
+        # Gather AI analysis data for these commits
+        commit_ids = [c.id for c in commits]
+        ai_data = self._get_ai_data(commit_ids)
+
         # Calculate sub-scores
         activity = self._calc_activity(developer_id, period_start, period_end, commits)
-        quality = self._calc_quality(developer_id, commits)
-        impact = self._calc_impact(developer_id, commits)
+        quality = self._calc_quality(developer_id, commits, ai_data)
+        impact = self._calc_impact(developer_id, commits, ai_data)
 
         # Weighted final
         w = self._weights
@@ -122,6 +121,10 @@ class ScoringEngine:
             positive_reasons.append(f"High-quality changes: {quality['meaningful_ratio']:.0%} meaningful")
         if impact["total_meaningful_lines"] > 500:
             positive_reasons.append(f"Significant impact: {impact['total_meaningful_lines']} meaningful lines")
+        if quality.get("avg_alignment", 0) >= 60:
+            positive_reasons.append(f"Good commit messages: {quality['avg_alignment']:.0f}/100 alignment")
+        if impact.get("feature_count", 0) >= 3:
+            positive_reasons.append(f"Feature-rich: {impact['feature_count']} features delivered")
 
         if activity["active_days"] < 3:
             negative_reasons.append(f"Low activity: only {activity['active_days']} active days")
@@ -129,6 +132,8 @@ class ScoringEngine:
             negative_reasons.append(f"Many trivial changes: {quality['meaningful_ratio']:.0%} meaningful")
         if quality["merge_ratio"] > 0.3:
             negative_reasons.append(f"High merge ratio: {quality['merge_ratio']:.0%}")
+        if quality.get("avg_alignment", 0) < 30 and quality.get("avg_alignment", 0) > 0:
+            negative_reasons.append(f"Poor commit messages: {quality['avg_alignment']:.0f}/100 alignment")
 
         # Delete old snapshot for same dev/period
         self.db.query(ScoreSnapshot).filter_by(
@@ -239,13 +244,14 @@ class ScoringEngine:
     #  Quality Score (0-100)
     # ────────────────────────────────────────────────────────────
 
-    def _calc_quality(self, dev_id: int, commits: list[Commit]) -> dict:
+    def _calc_quality(self, dev_id: int, commits: list[Commit], ai_data: dict = None) -> dict:
         """
-        Quality = f(coherence, meaningful_change_ratio, non-merge ratio)
+        Quality V2 = f(coherence, meaningful_ratio, non-merge, message_alignment, ai_quality)
         """
+        ai_data = ai_data or {}
         total = len(commits)
         if total == 0:
-            return {"score": 0, "meaningful_ratio": 0, "merge_ratio": 0, "work_item_count": 0}
+            return {"score": 0, "meaningful_ratio": 0, "merge_ratio": 0, "work_item_count": 0, "avg_alignment": 0}
 
         # Meaningful vs trivial commits
         meaningful = 0
@@ -254,12 +260,8 @@ class ScoringEngine:
             if c.is_merge:
                 merge_count += 1
                 continue
-
-            # Check if commit has meaningful files
             files = self.db.query(CommitFile).filter_by(commit_id=c.id).all()
-            has_meaningful = any(
-                not f.is_generated and not f.is_lockfile for f in files
-            )
+            has_meaningful = any(not f.is_generated and not f.is_lockfile for f in files)
             if has_meaningful or (c.additions or 0) + (c.deletions or 0) > 0:
                 meaningful += 1
 
@@ -267,7 +269,7 @@ class ScoringEngine:
         merge_ratio = merge_count / total if total > 0 else 0
         non_merge_ratio = 1 - merge_ratio
 
-        # Work item coherence: fewer work items per commit = better coherence
+        # Work item coherence
         work_item_count = (
             self.db.query(func.count(func.distinct(WorkItemCommit.work_item_id)))
             .join(Commit, Commit.id == WorkItemCommit.commit_id)
@@ -275,14 +277,13 @@ class ScoringEngine:
             .scalar()
         ) or 0
 
-        # Coherence: ratio of commits to work items (higher = more grouped = better)
         non_merge_commits = total - merge_count
         if work_item_count > 0 and non_merge_commits > 0:
             coherence = min(1.0, non_merge_commits / (work_item_count * 1.5))
         else:
-            coherence = 0.5  # no data, neutral
+            coherence = 0.5
 
-        # Message quality: rough check for descriptive messages
+        # Message quality: V1 heuristic
         good_messages = sum(
             1 for c in commits
             if c.message and len(c.message.split("\n")[0]) >= 10
@@ -290,11 +291,17 @@ class ScoringEngine:
         )
         message_quality = good_messages / total if total > 0 else 0
 
+        # V2: AI message alignment (average from ai_commit_analysis)
+        ai_alignments = [a.get("message_alignment_score", 0) for a in ai_data.values() if a.get("message_alignment_score")]
+        avg_alignment = sum(ai_alignments) / len(ai_alignments) if ai_alignments else 0
+        alignment_factor = avg_alignment / 100 if avg_alignment > 0 else message_quality
+
         score = (
-            meaningful_ratio * 35
-            + non_merge_ratio * 20
+            meaningful_ratio * 25
+            + non_merge_ratio * 15
             + coherence * 25
-            + message_quality * 20
+            + alignment_factor * 20
+            + message_quality * 15
         )
 
         return {
@@ -303,30 +310,28 @@ class ScoringEngine:
             "merge_ratio": merge_ratio,
             "coherence": coherence,
             "message_quality": message_quality,
+            "avg_alignment": avg_alignment,
             "work_item_count": work_item_count,
         }
 
     # ────────────────────────────────────────────────────────────
-    #  Impact Score (0-100) — simplified V1
+    #  Impact Score (0-100) — V2 with AI data
     # ────────────────────────────────────────────────────────────
 
-    def _calc_impact(self, dev_id: int, commits: list[Commit]) -> dict:
+    def _calc_impact(self, dev_id: int, commits: list[Commit], ai_data: dict = None) -> dict:
         """
-        Impact = weighted lines changed on meaningful files.
-        Bonus for bugfix-related commits.
+        Impact V2 = complexity-weighted lines + change_type bonuses from AI.
         """
+        ai_data = ai_data or {}
         total_lines = 0
         meaningful_lines = 0
         bugfix_count = 0
+        feature_count = 0
+        security_count = 0
         commit_ids = [c.id for c in commits]
 
-        # Get all files for these commits
         if commit_ids:
-            files = (
-                self.db.query(CommitFile)
-                .filter(CommitFile.commit_id.in_(commit_ids))
-                .all()
-            )
+            files = self.db.query(CommitFile).filter(CommitFile.commit_id.in_(commit_ids)).all()
         else:
             files = []
 
@@ -336,27 +341,46 @@ class ScoringEngine:
             if not f.is_generated and not f.is_lockfile:
                 meaningful_lines += lines
 
-        # Bugfix detection from commit messages
-        bugfix_pattern = re.compile(
-            r"\b(fix|bug|hotfix|patch|resolve|closes? #\d+)\b", re.IGNORECASE
-        )
-        for c in commits:
-            if c.message and bugfix_pattern.search(c.message):
+        # V2: Use AI change_type classification
+        for cid, ai in ai_data.items():
+            ct = ai.get("change_type", "")
+            if ct == "bugfix":
                 bugfix_count += 1
+            elif ct == "feature":
+                feature_count += 1
+            elif ct == "security":
+                security_count += 1
 
-        # Normalize meaningful lines: 2000 lines in period = 100
-        lines_score = min(100, (meaningful_lines / 2000) * 100)
+        # Fallback: detect bugfix from messages if no AI data
+        if not ai_data:
+            bugfix_pattern = re.compile(r"\b(fix|bug|hotfix|patch|resolve|closes? #\d+)\b", re.IGNORECASE)
+            for c in commits:
+                if c.message and bugfix_pattern.search(c.message):
+                    bugfix_count += 1
 
-        # Bugfix bonus
-        bugfix_bonus = min(20, bugfix_count * 5)
+        # V2: Complexity-weighted lines
+        avg_complexity = 0
+        if ai_data:
+            complexities = [a.get("complexity_score", 30) for a in ai_data.values()]
+            avg_complexity = sum(complexities) / len(complexities) if complexities else 30
+            # Higher complexity = more impactful work
+            complexity_multiplier = 0.7 + (avg_complexity / 100) * 0.6  # 0.7-1.3x
+        else:
+            complexity_multiplier = 1.0
 
-        # Meaningful-to-total ratio penalty
+        lines_score = min(100, (meaningful_lines / 2000) * 100) * complexity_multiplier
+
+        # Bonuses
+        bugfix_bonus = min(15, bugfix_count * 5)
+        feature_bonus = min(15, feature_count * 3)
+        security_bonus = min(10, security_count * 10)
+
         if total_lines > 0:
             meaningful_ratio = meaningful_lines / total_lines
         else:
             meaningful_ratio = 1.0
 
-        score = lines_score * 0.7 + bugfix_bonus + meaningful_ratio * 10
+        score = lines_score * 0.6 + bugfix_bonus + feature_bonus + security_bonus + meaningful_ratio * 10
 
         return {
             "score": min(100, score),
@@ -364,6 +388,37 @@ class ScoringEngine:
             "total_meaningful_lines": meaningful_lines,
             "meaningful_ratio": meaningful_ratio,
             "bugfix_count": bugfix_count,
+            "feature_count": feature_count,
+            "security_count": security_count,
+            "avg_complexity": round(avg_complexity, 1),
+        }
+
+    # ────────────────────────────────────────────────────────────
+    #  AI Data Helper
+    # ────────────────────────────────────────────────────────────
+
+    def _get_ai_data(self, commit_ids: list[int]) -> dict:
+        """Load AI analysis results for commits, keyed by commit_id."""
+        if not commit_ids:
+            return {}
+        analyses = (
+            self.db.query(AICommitAnalysis)
+            .filter(
+                AICommitAnalysis.target_type == "commit",
+                AICommitAnalysis.target_id.in_(commit_ids),
+            )
+            .all()
+        )
+        return {
+            a.target_id: {
+                "change_type": a.change_type,
+                "complexity_score": a.complexity_score,
+                "risk_score": a.risk_score,
+                "message_alignment_score": a.message_alignment_score,
+                "test_presence": a.test_presence,
+                "confidence": float(a.confidence) if a.confidence else 0,
+            }
+            for a in analyses
         }
 
     # ────────────────────────────────────────────────────────────
