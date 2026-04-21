@@ -1,6 +1,17 @@
 import axios from "axios";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const AUTH_TOKEN_KEY = "eng_analytics_token";
+const AUTH_USER_KEY = "eng_analytics_user";
+
+export type AuthUser = {
+  id: number;
+  username: string;
+  role: "admin" | "lead" | "developer";
+  developer_id?: number | null;
+  is_active: boolean;
+  last_login?: string | null;
+};
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,16 +20,61 @@ const api = axios.create({
   },
 });
 
+export const getStoredToken = () => localStorage.getItem(AUTH_TOKEN_KEY);
+
+export const setStoredAuth = (token: string, user: AuthUser) => {
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+};
+
+export const clearStoredAuth = () => {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
+};
+
+export const getStoredUser = (): AuthUser | null => {
+  const raw = localStorage.getItem(AUTH_USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AuthUser;
+  } catch {
+    clearStoredAuth();
+    return null;
+  }
+};
+
+api.interceptors.request.use((config) => {
+  const token = getStoredToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.response?.status === 401) {
+      clearStoredAuth();
+    }
     console.error("API Error:", error.response?.data || error.message);
     return Promise.reject(error);
   }
 );
 
 export default api;
+
+// ── Auth ───────────────────────────────────────────────────
+
+export const bootstrapAdmin = (data: { username: string; password: string }) =>
+  api.post("/api/auth/bootstrap", data);
+
+export const login = (data: { username: string; password: string }) =>
+  api.post("/api/auth/login", data);
+
+export const getCurrentUser = () =>
+  api.get("/api/auth/me");
 
 // ── Sync / Ingestion ──────────────────────────────────────
 

@@ -6,7 +6,7 @@ import {
 } from "antd";
 import {
   AppstoreOutlined, ClockCircleOutlined, PullRequestOutlined,
-  PlusOutlined, MinusOutlined, SyncOutlined, BuildOutlined,
+  PlusOutlined, MinusOutlined, BuildOutlined,
   FileOutlined, UserOutlined,
 } from "@ant-design/icons";
 import {

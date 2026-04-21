@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Card, Typography, Space, Spin, Button, Row, Col, Statistic,
-  message, Table, Tag, Modal, InputNumber, Descriptions, Divider,
+  message, Table, Tag, Modal, InputNumber,
   Switch, Alert,
 } from "antd";
 import {
@@ -16,6 +16,7 @@ const { Title, Text } = Typography;
 export default function AdminPage() {
   const [systemInfo, setSystemInfo] = useState<any>(null);
   const [configs, setConfigs] = useState<any[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
   const [recalcModal, setRecalcModal] = useState(false);
@@ -31,6 +32,7 @@ export default function AdminPage() {
     Promise.all([
       api.get("/api/admin/system-info").then((r: any) => setSystemInfo(r.data)),
       api.get("/api/admin/configs").then((r: any) => setConfigs(r.data)),
+      api.get("/api/admin/audit-logs").then((r: any) => setAuditLogs(r.data)),
     ]).finally(() => setLoading(false));
   };
 
@@ -101,6 +103,47 @@ export default function AdminPage() {
     },
   ];
 
+  const auditColumns = [
+    {
+      title: "Time",
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 180,
+      render: (v: string) => v ? new Date(v).toLocaleString() : "—",
+    },
+    {
+      title: "Action",
+      dataIndex: "action",
+      key: "action",
+      width: 180,
+      render: (v: string) => <Tag color="purple">{v}</Tag>,
+    },
+    {
+      title: "Actor",
+      dataIndex: "actor_id",
+      key: "actor_id",
+      width: 90,
+      render: (v: number | null) => v ?? "—",
+    },
+    {
+      title: "Target",
+      key: "target",
+      render: (_: any, r: any) => (
+        <Text code>
+          {r.target_type || "—"}
+          {r.target_id ? `#${r.target_id}` : ""}
+        </Text>
+      ),
+    },
+    {
+      title: "IP",
+      dataIndex: "ip_address",
+      key: "ip_address",
+      width: 120,
+      render: (v: string | null) => v || "—",
+    },
+  ];
+
   if (loading) {
     return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" /></div>;
   }
@@ -155,6 +198,14 @@ export default function AdminPage() {
             <Card size="small"><Statistic title="Scores" value={systemInfo.score_snapshots}
               prefix={<TrophyOutlined />} /></Card>
           </Col>
+          <Col xs={12} sm={6} md={3}>
+            <Card size="small"><Statistic title="Users" value={systemInfo.users}
+              prefix={<TeamOutlined />} /></Card>
+          </Col>
+          <Col xs={12} sm={6} md={3}>
+            <Card size="small"><Statistic title="Audit Logs" value={systemInfo.audit_logs}
+              prefix={<FileTextOutlined />} /></Card>
+          </Col>
         </Row>
       )}
 
@@ -180,6 +231,19 @@ export default function AdminPage() {
               <p><strong>Impact (35%):</strong> Complexity-weighted lines, bugfix/feature/security bonuses (AI), meaningful ratio</p>
             </div>
           }
+        />
+      </Card>
+
+      <Card
+        title={<Space><FileTextOutlined /> Audit Logs Gần Đây</Space>}
+        style={{ marginBottom: 24 }}
+      >
+        <Table
+          dataSource={auditLogs}
+          columns={auditColumns}
+          rowKey="id"
+          size="small"
+          pagination={{ pageSize: 5 }}
         />
       </Card>
 

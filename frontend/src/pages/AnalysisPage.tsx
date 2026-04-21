@@ -5,11 +5,11 @@ import {
 } from "antd";
 import {
   ExperimentOutlined, BugOutlined, RocketOutlined, FileTextOutlined,
-  ToolOutlined, SafetyCertificateOutlined, SettingOutlined, SyncOutlined,
+  ToolOutlined, SafetyCertificateOutlined, SettingOutlined,
   ThunderboltOutlined, AlertOutlined, CheckCircleOutlined, CodeOutlined,
 } from "@ant-design/icons";
 import {
-  PieChart, Pie, Cell, ResponsiveContainer, Tooltip as ReTooltip, Legend,
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip as ReTooltip,
 } from "recharts";
 import {
   getRepositories,
@@ -212,7 +212,7 @@ export default function AnalysisPage() {
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
                   <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%"
-                    outerRadius={90} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                    outerRadius={90} label={({ name, percent = 0 }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                     {pieData.map((entry: any) => (
                       <Cell key={entry.name} fill={TYPE_COLORS[entry.name] || "#999"} />
                     ))}

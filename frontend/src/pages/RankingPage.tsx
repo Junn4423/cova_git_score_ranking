@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Card, Table, Typography, Space, Tag, Spin, Select, Avatar,
-  Tooltip, Button, Row, Col, Statistic, message, Progress, Alert,
+  Tooltip, Button, message, Progress, Alert,
 } from "antd";
 import {
   TrophyOutlined, ThunderboltOutlined, SafetyCertificateOutlined,
-  RocketOutlined, CalendarOutlined, SyncOutlined,
+  RocketOutlined, SyncOutlined,
   StarOutlined, LikeOutlined, DislikeOutlined,
 } from "@ant-design/icons";
 import {
@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import { getRanking, calculateScores } from "../api/client";
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 interface RankedDev {
   rank: number;
@@ -41,7 +41,6 @@ export default function RankingPage() {
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
   const [days, setDays] = useState(90);
-  const [selectedDev, setSelectedDev] = useState<RankedDev | null>(null);
 
   const fetchRanking = () => {
     setLoading(true);

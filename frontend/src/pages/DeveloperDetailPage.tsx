@@ -2,14 +2,14 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Card, Row, Col, Typography, Space, Avatar, Tag, Table, Spin,
-  Statistic, Divider, Tooltip, Button, Modal, Input, Select, message,
-  Descriptions, Empty,
+  Statistic, Tooltip, Button, Modal, Input, Select, message,
+  Empty,
 } from "antd";
 import {
   ArrowLeftOutlined, CodeOutlined, PullRequestOutlined,
   FileTextOutlined, CalendarOutlined, PlusOutlined,
   MinusOutlined, BranchesOutlined, LinkOutlined,
-  UserSwitchOutlined, TagOutlined,
+  TagOutlined,
 } from "@ant-design/icons";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip,

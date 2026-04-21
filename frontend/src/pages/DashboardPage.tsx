@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
 import {
   Card, Row, Col, Statistic, Typography, Alert, Spin, Space, Tag,
-  Table, Button, Input, message, Divider, Avatar, Tooltip, Select,
+  Table, Button, Input, message, Avatar, Select,
 } from "antd";
 import {
   CheckCircleOutlined,
   ApiOutlined,
-  DatabaseOutlined,
-  GithubOutlined,
   TeamOutlined,
   CodeOutlined,
   PullRequestOutlined,
@@ -22,7 +20,7 @@ import {
 } from "@ant-design/icons";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip,
-  ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, Legend,
+  ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
 import { useNavigate } from "react-router-dom";
 import {

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
-import { Layout, Menu, theme, ConfigProvider, Typography, Space, Tag } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { Layout, Menu, theme, ConfigProvider, Typography, Space, Tag, Button, Spin } from "antd";
 import {
   DashboardOutlined,
   TeamOutlined,
@@ -11,6 +11,7 @@ import {
   AppstoreOutlined,
   TrophyOutlined,
   ExperimentOutlined,
+  LogoutOutlined,
 } from "@ant-design/icons";
 
 import DashboardPage from "./pages/DashboardPage";
@@ -23,6 +24,15 @@ import WorkItemsPage from "./pages/WorkItemsPage";
 import RankingPage from "./pages/RankingPage";
 import AnalysisPage from "./pages/AnalysisPage";
 import AdminPage from "./pages/AdminPage";
+import LoginPage from "./pages/LoginPage";
+import {
+  clearStoredAuth,
+  getCurrentUser,
+  getStoredToken,
+  getStoredUser,
+  setStoredAuth,
+  type AuthUser,
+} from "./api/client";
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title } = Typography;
@@ -38,11 +48,22 @@ const menuItems = [
   { key: "/admin", icon: <SettingOutlined />, label: "Admin" },
 ];
 
-function AppLayout() {
+type AppLayoutProps = {
+  currentUser: AuthUser;
+  onLogout: () => void;
+};
+
+function AppLayout({ currentUser, onLogout }: AppLayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { token: themeToken } = theme.useToken();
+  const canAccessAdmin = currentUser.role === "admin" || currentUser.role === "lead";
+
+  const visibleMenuItems = useMemo(
+    () => menuItems.filter((item) => (item.key === "/admin" ? canAccessAdmin : true)),
+    [canAccessAdmin]
+  );
 
   // Determine active menu key based on current path
   const getSelectedKey = () => {
@@ -88,7 +109,7 @@ function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[getSelectedKey()]}
-          items={menuItems}
+          items={visibleMenuItems}
           onClick={({ key }) => navigate(key)}
           style={{ borderRight: 0 }}
         />
@@ -111,6 +132,14 @@ function AppLayout() {
             </Title>
             <Tag color="blue">v0.4.0</Tag>
           </Space>
+          <Space>
+            <Tag color={canAccessAdmin ? "purple" : "default"}>
+              {currentUser.username} ({currentUser.role})
+            </Tag>
+            <Button icon={<LogoutOutlined />} onClick={onLogout}>
+              Đăng xuất
+            </Button>
+          </Space>
         </Header>
         <Content
           style={{
@@ -131,7 +160,10 @@ function AppLayout() {
             <Route path="/work-items" element={<WorkItemsPage />} />
             <Route path="/analysis" element={<AnalysisPage />} />
             <Route path="/pull-requests" element={<PullRequestsPage />} />
-            <Route path="/admin" element={<AdminPage />} />
+            <Route
+              path="/admin"
+              element={canAccessAdmin ? <AdminPage /> : <Navigate to="/" replace />}
+            />
           </Routes>
         </Content>
         <Footer style={{ textAlign: "center", color: themeToken.colorTextSecondary }}>
@@ -143,6 +175,33 @@ function AppLayout() {
 }
 
 function App() {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(getStoredUser());
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      setAuthLoading(false);
+      return;
+    }
+
+    getCurrentUser()
+      .then((res) => {
+        setStoredAuth(token, res.data.user);
+        setCurrentUser(res.data.user);
+      })
+      .catch(() => {
+        clearStoredAuth();
+        setCurrentUser(null);
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const handleLogout = () => {
+    clearStoredAuth();
+    setCurrentUser(null);
+  };
+
   return (
     <ConfigProvider
       theme={{
@@ -154,9 +213,24 @@ function App() {
         },
       }}
     >
-      <BrowserRouter>
-        <AppLayout />
-      </BrowserRouter>
+      {authLoading ? (
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Spin size="large" />
+        </div>
+      ) : currentUser ? (
+        <BrowserRouter>
+          <AppLayout currentUser={currentUser} onLogout={handleLogout} />
+        </BrowserRouter>
+      ) : (
+        <LoginPage onAuthenticated={setCurrentUser} />
+      )}
     </ConfigProvider>
   );
 }
