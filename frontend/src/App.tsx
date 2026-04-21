@@ -8,6 +8,8 @@ import {
   PullRequestOutlined,
   SettingOutlined,
   GithubOutlined,
+  AppstoreOutlined,
+  TrophyOutlined,
 } from "@ant-design/icons";
 
 import DashboardPage from "./pages/DashboardPage";
@@ -16,14 +18,18 @@ import DeveloperDetailPage from "./pages/DeveloperDetailPage";
 import RepositoriesPage from "./pages/RepositoriesPage";
 import RepositoryDetailPage from "./pages/RepositoryDetailPage";
 import PullRequestsPage from "./pages/PullRequestsPage";
+import WorkItemsPage from "./pages/WorkItemsPage";
+import RankingPage from "./pages/RankingPage";
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title } = Typography;
 
 const menuItems = [
   { key: "/", icon: <DashboardOutlined />, label: "Dashboard" },
+  { key: "/ranking", icon: <TrophyOutlined />, label: "Ranking" },
   { key: "/developers", icon: <TeamOutlined />, label: "Developers" },
   { key: "/repositories", icon: <CodeOutlined />, label: "Repositories" },
+  { key: "/work-items", icon: <AppstoreOutlined />, label: "Work Items" },
   { key: "/pull-requests", icon: <PullRequestOutlined />, label: "Pull Requests" },
   { key: "/admin", icon: <SettingOutlined />, label: "Admin" },
 ];
@@ -37,8 +43,10 @@ function AppLayout() {
   // Determine active menu key based on current path
   const getSelectedKey = () => {
     const path = location.pathname;
+    if (path.startsWith("/ranking")) return "/ranking";
     if (path.startsWith("/developers")) return "/developers";
     if (path.startsWith("/repositories")) return "/repositories";
+    if (path.startsWith("/work-items")) return "/work-items";
     if (path.startsWith("/pull-requests")) return "/pull-requests";
     if (path.startsWith("/admin")) return "/admin";
     return "/";
@@ -96,7 +104,7 @@ function AppLayout() {
             <Title level={4} style={{ margin: 0 }}>
               Engineering Contribution Analytics
             </Title>
-            <Tag color="blue">v0.2.0</Tag>
+            <Tag color="blue">v0.3.0</Tag>
           </Space>
         </Header>
         <Content
@@ -110,10 +118,12 @@ function AppLayout() {
         >
           <Routes>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/ranking" element={<RankingPage />} />
             <Route path="/developers" element={<DevelopersPage />} />
             <Route path="/developers/:id" element={<DeveloperDetailPage />} />
             <Route path="/repositories" element={<RepositoriesPage />} />
             <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
+            <Route path="/work-items" element={<WorkItemsPage />} />
             <Route path="/pull-requests" element={<PullRequestsPage />} />
             <Route path="/admin" element={<div>Admin Settings (coming in Week 6)</div>} />
           </Routes>

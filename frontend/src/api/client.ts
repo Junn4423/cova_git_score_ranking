@@ -81,7 +81,38 @@ export const getPullRequests = (params?: {
   limit?: number;
 }) => api.get("/api/pull-requests", { params });
 
+// ── Work Items ────────────────────────────────────────────
+
+export const buildWorkItems = (data: { repo_id: number; rebuild?: boolean }) =>
+  api.post("/api/work-items/build", data);
+
+export const getWorkItems = (params?: {
+  repo_id?: number;
+  developer_id?: number;
+  grouping_method?: string;
+  limit?: number;
+  offset?: number;
+}) => api.get("/api/work-items", { params });
+
+export const getWorkItem = (id: number) =>
+  api.get(`/api/work-items/${id}`);
+
+export const getWorkItemStats = () =>
+  api.get("/api/work-items/stats");
+
+// ── Scores ────────────────────────────────────────────────
+
+export const calculateScores = (data: { developer_id?: number; period_days?: number }) =>
+  api.post("/api/scores/calculate", data);
+
+export const getRanking = (params?: { period_days?: number; limit?: number }) =>
+  api.get("/api/scores/ranking", { params });
+
+export const getDeveloperScore = (devId: number, params?: { period_days?: number }) =>
+  api.get(`/api/scores/${devId}`, { params });
+
 // ── Commits (legacy sync endpoint) ───────────────────────
 
 export const getCommits = (params?: { repo_id?: number; limit?: number }) =>
   api.get("/api/sync/commits", { params });
+
