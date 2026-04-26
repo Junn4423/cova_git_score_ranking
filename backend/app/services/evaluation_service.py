@@ -9,11 +9,13 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import httpx
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.ai.service import AnalysisService
 from app.core.config import settings
+from app.github.client import GitHubRateLimitError
 from app.models.models import (
     Commit,
     EvaluationResult,
@@ -38,8 +40,9 @@ class EvaluationService:
         *,
         repo_url: str,
         period_days: int = 90,
-        max_commit_pages: int = 5,
-        max_pr_pages: int = 5,
+        max_commit_pages: int = 1,
+        max_pr_pages: int = 1,
+        fetch_files: bool = False,
         run_analysis: bool = True,
         force_resync: bool = False,
         requested_by: User | None = None,
@@ -51,7 +54,32 @@ class EvaluationService:
         ingestion = IngestionService(self.db)
         repo = self.db.query(Repository).filter_by(full_name=full_name).first()
         if not repo or force_resync:
-            repo = ingestion.sync_single_repo(full_name)
+            try:
+                repo = ingestion.sync_single_repo(full_name)
+            except GitHubRateLimitError as exc:
+                raise ValueError(
+                    "GitHub rate limit exceeded while checking repository. "
+                    "Configure GITHUB_TOKEN, reduce pages, or retry later."
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                if status_code == 404:
+                    raise ValueError(
+                        f"Cannot access repository '{full_name}'. It may not exist, may be private, "
+                        "or the configured GITHUB_TOKEN does not have read permission."
+                    ) from exc
+                if status_code == 401:
+                    raise ValueError(
+                        "GitHub token is invalid or expired. Check GITHUB_TOKEN."
+                    ) from exc
+                if status_code == 403:
+                    raise ValueError(
+                        "GitHub access forbidden. The token may lack permission, org policy may block it, "
+                        "or the rate limit may be exhausted."
+                    ) from exc
+                raise ValueError(
+                    f"GitHub API returned {status_code} while checking repository '{full_name}'."
+                ) from exc
 
         run = EvaluationRun(
             repo_id=repo.id,
@@ -76,7 +104,7 @@ class EvaluationService:
                 since=period_start.isoformat(),
                 max_commit_pages=max_commit_pages,
                 max_pr_pages=max_pr_pages,
-                fetch_files=True,
+                fetch_files=fetch_files,
             )
             repo = self.db.query(Repository).filter_by(full_name=full_name).first()
             run.repo_id = repo.id
@@ -113,6 +141,14 @@ class EvaluationService:
             self.db.commit()
             self.db.refresh(run)
             return run
+        except GitHubRateLimitError as exc:
+            run.status = "failed"
+            run.error_message = (
+                "GitHub rate limit exceeded during evaluation. Configure GITHUB_TOKEN, "
+                "reduce pages, disable file fetching, or retry later."
+            )
+            self.db.commit()
+            raise ValueError(run.error_message) from exc
         except Exception as exc:
             run.status = "failed"
             run.error_message = str(exc)
