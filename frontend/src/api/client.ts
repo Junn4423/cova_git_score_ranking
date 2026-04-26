@@ -158,14 +158,37 @@ export const getWorkItemStats = () =>
 
 // ── Scores ────────────────────────────────────────────────
 
-export const calculateScores = (data: { developer_id?: number; period_days?: number }) =>
+export const calculateScores = (data: { developer_id?: number; repo_id?: number; period_days?: number }) =>
   api.post("/api/scores/calculate", data);
 
-export const getRanking = (params?: { period_days?: number; limit?: number }) =>
+export const getRanking = (params?: { repo_id?: number; period_days?: number; limit?: number }) =>
   api.get("/api/scores/ranking", { params });
 
-export const getDeveloperScore = (devId: number, params?: { period_days?: number }) =>
+export const getDeveloperScore = (devId: number, params?: { repo_id?: number; period_days?: number }) =>
   api.get(`/api/scores/${devId}`, { params });
+
+// ── Evaluations ────────────────────────────────────────────
+
+export const createEvaluation = (data: {
+  repo_url: string;
+  period_days?: number;
+  max_commit_pages?: number;
+  max_pr_pages?: number;
+  run_analysis?: boolean;
+  force_resync?: boolean;
+}) => api.post("/api/evaluations", data);
+
+export const listEvaluations = (params?: { limit?: number }) =>
+  api.get("/api/evaluations", { params });
+
+export const getEvaluation = (id: number) =>
+  api.get(`/api/evaluations/${id}`);
+
+export const getEvaluationResults = (id: number) =>
+  api.get(`/api/evaluations/${id}/results`);
+
+export const getEvaluationReport = (id: number) =>
+  api.get(`/api/evaluations/${id}/report`);
 
 // ── Commits (legacy sync endpoint) ───────────────────────
 

@@ -97,6 +97,8 @@ class Repository(Base):
 
     commits = relationship("Commit", back_populates="repository")
     pull_requests = relationship("PullRequest", back_populates="repository")
+    score_snapshots = relationship("ScoreSnapshot", back_populates="repository")
+    evaluation_runs = relationship("EvaluationRun", back_populates="repository")
 
 
 # ── commits ─────────────────────────────────────────────────
@@ -311,6 +313,7 @@ class ScoreSnapshot(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     developer_id = Column(Integer, ForeignKey("developers.id", ondelete="CASCADE"), nullable=False)
+    repo_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"))
     period_start = Column(Date, nullable=False)
     period_end = Column(Date, nullable=False)
     activity_score = Column(DECIMAL(6, 2))
@@ -324,11 +327,14 @@ class ScoreSnapshot(Base):
     calculated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     developer = relationship("Developer", back_populates="score_snapshots")
+    repository = relationship("Repository", back_populates="score_snapshots")
     breakdowns = relationship("ScoreBreakdown", back_populates="snapshot", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_score_dev", "developer_id"),
         Index("idx_score_period", "period_start", "period_end"),
+        Index("idx_score_repo_period", "repo_id", "period_start", "period_end"),
+        Index("idx_score_repo_dev_period", "repo_id", "developer_id", "period_start", "period_end"),
     )
 
 
@@ -353,6 +359,72 @@ class ScoreBreakdown(Base):
 
 
 # ── app_configs ─────────────────────────────────────────────
+class EvaluationRun(Base):
+    __tablename__ = "evaluation_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    repo_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    requested_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    status = Column(
+        Enum("pending", "running", "done", "failed", "cancelled"),
+        default="pending",
+        nullable=False,
+    )
+    current_step = Column(String(100))
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    input_repo_url = Column(String(500))
+    access_mode = Column(Enum("public", "server_token", "github_app", "oauth"))
+    sync_started_at = Column(DateTime)
+    sync_completed_at = Column(DateTime)
+    grouping_completed_at = Column(DateTime)
+    analysis_completed_at = Column(DateTime)
+    scoring_completed_at = Column(DateTime)
+    report_completed_at = Column(DateTime)
+    error_message = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    repository = relationship("Repository", back_populates="evaluation_runs")
+    requested_by = relationship("User")
+    results = relationship("EvaluationResult", back_populates="evaluation_run", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_eval_repo_period", "repo_id", "period_start", "period_end"),
+        Index("idx_eval_status", "status"),
+    )
+
+
+class EvaluationResult(Base):
+    __tablename__ = "evaluation_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    evaluation_run_id = Column(Integer, ForeignKey("evaluation_runs.id", ondelete="CASCADE"), nullable=False)
+    developer_id = Column(Integer, ForeignKey("developers.id", ondelete="CASCADE"), nullable=False)
+    repo_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    rank_no = Column(Integer, nullable=False)
+    final_score = Column(DECIMAL(6, 2), nullable=False)
+    activity_score = Column(DECIMAL(6, 2))
+    quality_score = Column(DECIMAL(6, 2))
+    impact_score = Column(DECIMAL(6, 2))
+    confidence_score = Column(DECIMAL(3, 2))
+    summary_vi = Column(Text)
+    strengths = Column(JSON)
+    weaknesses = Column(JSON)
+    recommendations = Column(JSON)
+    evidence = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    evaluation_run = relationship("EvaluationRun", back_populates="results")
+    developer = relationship("Developer")
+    repository = relationship("Repository")
+
+    __table_args__ = (
+        Index("uq_eval_dev", "evaluation_run_id", "developer_id", unique=True),
+        Index("idx_eval_result_repo_rank", "repo_id", "rank_no"),
+    )
+
+
 class AppConfig(Base):
     __tablename__ = "app_configs"
 

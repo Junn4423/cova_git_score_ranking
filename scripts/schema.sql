@@ -254,6 +254,7 @@ CREATE TABLE IF NOT EXISTS ai_commit_analysis (
 CREATE TABLE IF NOT EXISTS score_snapshots (
   id              INT AUTO_INCREMENT PRIMARY KEY,
   developer_id    INT NOT NULL,
+  repo_id         INT NULL,
   period_start    DATE NOT NULL,
   period_end      DATE NOT NULL,
   activity_score  DECIMAL(6,2),
@@ -267,7 +268,10 @@ CREATE TABLE IF NOT EXISTS score_snapshots (
   calculated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_score_dev (developer_id),
   INDEX idx_score_period (period_start, period_end),
-  FOREIGN KEY (developer_id) REFERENCES developers(id) ON DELETE CASCADE
+  INDEX idx_score_repo_period (repo_id, period_start, period_end),
+  INDEX idx_score_repo_dev_period (repo_id, developer_id, period_start, period_end),
+  FOREIGN KEY (developer_id) REFERENCES developers(id) ON DELETE CASCADE,
+  FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- -----------------------------------------------------------
@@ -287,7 +291,61 @@ CREATE TABLE IF NOT EXISTS score_breakdowns (
 ) ENGINE=InnoDB;
 
 -- -----------------------------------------------------------
--- 14. app_configs
+-- 14. evaluation_runs
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  repo_id         INT NOT NULL,
+  requested_by_user_id INT NULL,
+  status          ENUM('pending','running','done','failed','cancelled') NOT NULL DEFAULT 'pending',
+  current_step    VARCHAR(100) NULL,
+  period_start    DATE NOT NULL,
+  period_end      DATE NOT NULL,
+  input_repo_url  VARCHAR(500) NULL,
+  access_mode     ENUM('public','server_token','github_app','oauth') NULL,
+  sync_started_at DATETIME NULL,
+  sync_completed_at DATETIME NULL,
+  grouping_completed_at DATETIME NULL,
+  analysis_completed_at DATETIME NULL,
+  scoring_completed_at DATETIME NULL,
+  report_completed_at DATETIME NULL,
+  error_message   TEXT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_eval_repo_period (repo_id, period_start, period_end),
+  INDEX idx_eval_status (status),
+  FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- -----------------------------------------------------------
+-- 15. evaluation_results
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS evaluation_results (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  evaluation_run_id INT NOT NULL,
+  developer_id    INT NOT NULL,
+  repo_id         INT NOT NULL,
+  rank_no         INT NOT NULL,
+  final_score     DECIMAL(6,2) NOT NULL,
+  activity_score  DECIMAL(6,2),
+  quality_score   DECIMAL(6,2),
+  impact_score    DECIMAL(6,2),
+  confidence_score DECIMAL(3,2),
+  summary_vi      TEXT,
+  strengths       JSON,
+  weaknesses      JSON,
+  recommendations JSON,
+  evidence        JSON,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_eval_dev (evaluation_run_id, developer_id),
+  INDEX idx_eval_result_repo_rank (repo_id, rank_no),
+  FOREIGN KEY (evaluation_run_id) REFERENCES evaluation_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY (developer_id) REFERENCES developers(id) ON DELETE CASCADE,
+  FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- -----------------------------------------------------------
+-- 16. app_configs
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS app_configs (
   id              INT AUTO_INCREMENT PRIMARY KEY,

@@ -86,6 +86,7 @@ def update_config(
 
 
 class RecalculateRequest(BaseModel):
+    repo_id: Optional[int] = None
     period_days: int = 90
     rebuild_work_items: bool = False
     rerun_analysis: bool = False
@@ -102,10 +103,15 @@ def recalculate_all(
     from app.models.models import Repository
 
     results = {"steps": []}
+    target_repo = None
+    if req.repo_id is not None:
+        target_repo = db.get(Repository, req.repo_id)
+        if not target_repo:
+            raise HTTPException(status_code=404, detail="Repository not found")
 
     # Step 1: Rebuild work items if requested
     if req.rebuild_work_items:
-        repos = db.query(Repository).all()
+        repos = [target_repo] if target_repo else db.query(Repository).all()
         svc = GroupingService(db)
         for repo in repos:
             svc.clear_work_items_for_repo(repo.id)
@@ -114,7 +120,7 @@ def recalculate_all(
 
     # Step 2: Rerun analysis if requested
     if req.rerun_analysis:
-        repos = db.query(Repository).all()
+        repos = [target_repo] if target_repo else db.query(Repository).all()
         asvc = AnalysisService(db)
         for repo in repos:
             r = asvc.analyze_repo(repo.id, force=True)
@@ -124,10 +130,12 @@ def recalculate_all(
     engine = ScoringEngine(db)
     period_end = date.today()
     period_start = period_end - timedelta(days=req.period_days)
-    snaps = engine.calculate_all_scores(period_start, period_end)
+    snaps = engine.calculate_all_scores(req.repo_id, period_start, period_end)
     results["steps"].append({
         "action": "calculate_scores",
         "developers_scored": len(snaps),
+        "repo_id": req.repo_id,
+        "repo": target_repo.full_name if target_repo else None,
         "period": f"{period_start} to {period_end}",
     })
 

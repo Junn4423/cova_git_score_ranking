@@ -11,17 +11,17 @@ V2 enhancements:
 
 import logging
 import re
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date
+from sqlalchemy import func
 
 from app.models.models import (
     Developer, Commit, CommitFile, PullRequest, Review,
     WorkItem, WorkItemCommit, AICommitAnalysis,
-    ScoreSnapshot, ScoreBreakdown, AppConfig,
+    ScoreSnapshot, ScoreBreakdown, AppConfig, Repository,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,8 +49,26 @@ class ScoringEngine:
             .first()
         )
         if cfg and isinstance(cfg.config_value, dict):
-            return {**DEFAULT_WEIGHTS, **cfg.config_value}
+            value = cfg.config_value
+            return {
+                "activity_weight": float(
+                    value.get("activity_weight", value.get("activity", DEFAULT_WEIGHTS["activity_weight"]))
+                ),
+                "quality_weight": float(
+                    value.get("quality_weight", value.get("quality", DEFAULT_WEIGHTS["quality_weight"]))
+                ),
+                "impact_weight": float(
+                    value.get("impact_weight", value.get("impact", DEFAULT_WEIGHTS["impact_weight"]))
+                ),
+            }
         return DEFAULT_WEIGHTS.copy()
+
+    @staticmethod
+    def _period_bounds(period_start: date, period_end: date) -> tuple[datetime, datetime]:
+        return (
+            datetime.combine(period_start, datetime.min.time()),
+            datetime.combine(period_end, datetime.max.time()),
+        )
 
     # ────────────────────────────────────────────────────────────
     #  Main scoring
@@ -59,14 +77,25 @@ class ScoringEngine:
     def calculate_score(
         self,
         developer_id: int,
-        period_start: date,
-        period_end: date,
+        repo_id: int | None = None,
+        period_start: date | None = None,
+        period_end: date | None = None,
     ) -> Optional[ScoreSnapshot]:
         """
-        Calculate contribution score for a developer in a period.
+        Calculate contribution score for a developer in a period and optional repo.
         Returns the created ScoreSnapshot.
         """
-        dev = self.db.query(Developer).get(developer_id)
+        # Backward compatibility for old calls:
+        # calculate_score(developer_id, period_start, period_end)
+        if isinstance(repo_id, date) and isinstance(period_start, date) and period_end is None:
+            period_end = period_start
+            period_start = repo_id
+            repo_id = None
+
+        if period_start is None or period_end is None:
+            raise ValueError("period_start and period_end are required")
+
+        dev = self.db.get(Developer, developer_id)
         if not dev:
             logger.warning("Developer #%d not found", developer_id)
             return None
@@ -75,19 +104,33 @@ class ScoringEngine:
             logger.info("Skipping bot: %s", dev.github_login)
             return None
 
+        repo = None
+        if repo_id is not None:
+            repo = self.db.get(Repository, repo_id)
+            if not repo:
+                raise ValueError(f"Repository #{repo_id} not found")
+
         # Gather data for the period
-        commits = (
-            self.db.query(Commit)
-            .filter(
-                Commit.author_id == developer_id,
-                Commit.committed_at >= datetime.combine(period_start, datetime.min.time()),
-                Commit.committed_at <= datetime.combine(period_end, datetime.max.time()),
-            )
-            .all()
+        start_dt, end_dt = self._period_bounds(period_start, period_end)
+        commit_query = self.db.query(Commit).filter(
+            Commit.author_id == developer_id,
+            Commit.committed_at >= start_dt,
+            Commit.committed_at <= end_dt,
         )
+        if repo_id is not None:
+            commit_query = commit_query.filter(Commit.repo_id == repo_id)
+        commits = commit_query.all()
 
         if not commits:
-            logger.info("No commits for %s in period", dev.github_login)
+            self._delete_existing_snapshot(developer_id, repo_id, period_start, period_end)
+            self.db.commit()
+            logger.info(
+                "No commits for %s in %s (%s to %s)",
+                dev.github_login,
+                repo.full_name if repo else "global scope",
+                period_start,
+                period_end,
+            )
             return None
 
         # Gather AI analysis data for these commits
@@ -95,8 +138,8 @@ class ScoringEngine:
         ai_data = self._get_ai_data(commit_ids)
 
         # Calculate sub-scores
-        activity = self._calc_activity(developer_id, period_start, period_end, commits)
-        quality = self._calc_quality(developer_id, commits, ai_data)
+        activity = self._calc_activity(developer_id, repo_id, period_start, period_end, commits)
+        quality = self._calc_quality(developer_id, repo_id, period_start, period_end, commits, ai_data)
         impact = self._calc_impact(developer_id, commits, ai_data)
 
         # Weighted final
@@ -107,9 +150,9 @@ class ScoringEngine:
             + impact["score"] * w["impact_weight"]
         )
 
-        # Confidence: based on data volume
+        # Confidence: based on multiple repo-scoped data signals, not raw commits only.
         commit_count = len(commits)
-        confidence = min(1.0, commit_count / 20)  # 20+ commits = full confidence
+        confidence = self._calc_confidence(activity, quality, ai_data)
 
         # Positive / negative reasons
         positive_reasons = []
@@ -135,15 +178,14 @@ class ScoringEngine:
         if quality.get("avg_alignment", 0) < 30 and quality.get("avg_alignment", 0) > 0:
             negative_reasons.append(f"Poor commit messages: {quality['avg_alignment']:.0f}/100 alignment")
 
-        # Delete old snapshot for same dev/period
-        self.db.query(ScoreSnapshot).filter_by(
-            developer_id=developer_id,
-            period_start=period_start,
-            period_end=period_end,
-        ).delete(synchronize_session=False)
+        # Delete old snapshot for same developer/repo/period.
+        self._delete_existing_snapshot(developer_id, repo_id, period_start, period_end)
+
+        scope_label = repo.full_name if repo else "Toan he thong"
 
         snapshot = ScoreSnapshot(
             developer_id=developer_id,
+            repo_id=repo_id,
             period_start=period_start,
             period_end=period_end,
             activity_score=Decimal(str(round(activity["score"], 2))),
@@ -154,6 +196,7 @@ class ScoringEngine:
             top_positive_reasons=positive_reasons[:5],
             top_negative_reasons=negative_reasons[:5],
             evidence_links=[
+                f"Repo: {scope_label}",
                 f"Commits: {commit_count}",
                 f"Active days: {activity['active_days']}",
                 f"Work items: {quality.get('work_item_count', 0)}",
@@ -181,8 +224,11 @@ class ScoringEngine:
 
         self.db.commit()
         logger.info(
-            "Score for %s (%s to %s): %.2f (A=%.1f Q=%.1f I=%.1f, conf=%.2f)",
-            dev.github_login, period_start, period_end,
+            "Score for %s in %s (%s to %s): %.2f (A=%.1f Q=%.1f I=%.1f, conf=%.2f)",
+            dev.github_login,
+            repo.full_name if repo else "global scope",
+            period_start,
+            period_end,
             final, activity["score"], quality["score"], impact["score"], confidence,
         )
         return snapshot
@@ -191,8 +237,53 @@ class ScoringEngine:
     #  Activity Score (0-100)
     # ────────────────────────────────────────────────────────────
 
+    def _delete_existing_snapshot(
+        self,
+        developer_id: int,
+        repo_id: int | None,
+        period_start: date,
+        period_end: date,
+    ) -> None:
+        query = self.db.query(ScoreSnapshot).filter(
+            ScoreSnapshot.developer_id == developer_id,
+            ScoreSnapshot.period_start == period_start,
+            ScoreSnapshot.period_end == period_end,
+        )
+        if repo_id is None:
+            query = query.filter(ScoreSnapshot.repo_id.is_(None))
+        else:
+            query = query.filter(ScoreSnapshot.repo_id == repo_id)
+        query.delete(synchronize_session=False)
+
+    def _count_work_items(
+        self,
+        dev_id: int,
+        repo_id: int | None,
+        start: date,
+        end: date,
+    ) -> int:
+        start_dt, end_dt = self._period_bounds(start, end)
+        query = (
+            self.db.query(func.count(func.distinct(WorkItemCommit.work_item_id)))
+            .join(Commit, Commit.id == WorkItemCommit.commit_id)
+            .join(WorkItem, WorkItem.id == WorkItemCommit.work_item_id)
+            .filter(
+                Commit.author_id == dev_id,
+                Commit.committed_at >= start_dt,
+                Commit.committed_at <= end_dt,
+            )
+        )
+        if repo_id is not None:
+            query = query.filter(Commit.repo_id == repo_id)
+        return query.scalar() or 0
+
     def _calc_activity(
-        self, dev_id: int, start: date, end: date, commits: list[Commit]
+        self,
+        dev_id: int,
+        repo_id: int | None,
+        start: date,
+        end: date,
+        commits: list[Commit],
     ) -> dict:
         """
         Activity = f(active_days, pr_count, review_count)
@@ -201,42 +292,54 @@ class ScoringEngine:
         active_days = len(set(
             c.committed_at.date() for c in commits if c.committed_at
         ))
+        start_dt, end_dt = self._period_bounds(start, end)
 
         # Merged PRs in period
-        merged_prs = (
-            self.db.query(func.count(PullRequest.id))
-            .filter(
-                PullRequest.author_id == dev_id,
-                PullRequest.merged == True,
-                PullRequest.merged_at >= datetime.combine(start, datetime.min.time()),
-                PullRequest.merged_at <= datetime.combine(end, datetime.max.time()),
-            )
-            .scalar()
-        ) or 0
+        pr_query = self.db.query(func.count(PullRequest.id)).filter(
+            PullRequest.author_id == dev_id,
+            PullRequest.merged == True,
+            PullRequest.merged_at >= start_dt,
+            PullRequest.merged_at <= end_dt,
+        )
+        if repo_id is not None:
+            pr_query = pr_query.filter(PullRequest.repo_id == repo_id)
+        merged_prs = pr_query.scalar() or 0
 
         # Reviews given in period
-        reviews_given = (
+        review_query = (
             self.db.query(func.count(Review.id))
+            .join(PullRequest, PullRequest.id == Review.pull_request_id)
             .filter(
                 Review.reviewer_id == dev_id,
-                Review.submitted_at >= datetime.combine(start, datetime.min.time()),
-                Review.submitted_at <= datetime.combine(end, datetime.max.time()),
+                Review.submitted_at >= start_dt,
+                Review.submitted_at <= end_dt,
             )
-            .scalar()
-        ) or 0
+        )
+        if repo_id is not None:
+            review_query = review_query.filter(PullRequest.repo_id == repo_id)
+        reviews_given = review_query.scalar() or 0
+
+        work_item_count = self._count_work_items(dev_id, repo_id, start, end)
 
         # Normalize: active_days → max 30 for full score
         days_score = min(100, (active_days / 20) * 100)
         pr_score = min(100, merged_prs * 15)  # each merged PR = 15 points
         review_score = min(100, reviews_given * 10)  # each review = 10 points
+        work_item_score = min(100, work_item_count * 20)
 
-        score = days_score * 0.5 + pr_score * 0.3 + review_score * 0.2
+        score = (
+            days_score * 0.4
+            + pr_score * 0.25
+            + review_score * 0.15
+            + work_item_score * 0.2
+        )
 
         return {
             "score": min(100, score),
             "active_days": active_days,
             "merged_prs": merged_prs,
             "reviews_given": reviews_given,
+            "work_item_count": work_item_count,
             "commit_count": len(commits),
         }
 
@@ -244,14 +347,29 @@ class ScoringEngine:
     #  Quality Score (0-100)
     # ────────────────────────────────────────────────────────────
 
-    def _calc_quality(self, dev_id: int, commits: list[Commit], ai_data: dict = None) -> dict:
+    def _calc_quality(
+        self,
+        dev_id: int,
+        repo_id: int | None,
+        start: date,
+        end: date,
+        commits: list[Commit],
+        ai_data: dict = None,
+    ) -> dict:
         """
         Quality V2 = f(coherence, meaningful_ratio, non-merge, message_alignment, ai_quality)
         """
         ai_data = ai_data or {}
         total = len(commits)
         if total == 0:
-            return {"score": 0, "meaningful_ratio": 0, "merge_ratio": 0, "work_item_count": 0, "avg_alignment": 0}
+            return {
+                "score": 0,
+                "meaningful_ratio": 0,
+                "merge_ratio": 0,
+                "work_item_count": 0,
+                "avg_alignment": 0,
+                "meaningful_count": 0,
+            }
 
         # Meaningful vs trivial commits
         meaningful = 0
@@ -270,12 +388,7 @@ class ScoringEngine:
         non_merge_ratio = 1 - merge_ratio
 
         # Work item coherence
-        work_item_count = (
-            self.db.query(func.count(func.distinct(WorkItemCommit.work_item_id)))
-            .join(Commit, Commit.id == WorkItemCommit.commit_id)
-            .filter(Commit.author_id == dev_id)
-            .scalar()
-        ) or 0
+        work_item_count = self._count_work_items(dev_id, repo_id, start, end)
 
         non_merge_commits = total - merge_count
         if work_item_count > 0 and non_merge_commits > 0:
@@ -312,7 +425,25 @@ class ScoringEngine:
             "message_quality": message_quality,
             "avg_alignment": avg_alignment,
             "work_item_count": work_item_count,
+            "meaningful_count": meaningful,
         }
+
+    def _calc_confidence(self, activity: dict, quality: dict, ai_data: dict) -> float:
+        """Estimate confidence from repo-scoped data volume and analysis quality."""
+        high_conf_ai = sum(
+            1
+            for item in ai_data.values()
+            if float(item.get("confidence") or 0) >= 0.7
+        )
+        weighted_volume = (
+            activity.get("active_days", 0) * 0.35
+            + quality.get("meaningful_count", 0) * 0.6
+            + activity.get("merged_prs", 0) * 1.5
+            + activity.get("reviews_given", 0) * 0.8
+            + quality.get("work_item_count", 0) * 2.0
+            + high_conf_ai * 0.4
+        )
+        return min(1.0, weighted_volume / 20)
 
     # ────────────────────────────────────────────────────────────
     #  Impact Score (0-100) — V2 with AI data
@@ -427,21 +558,52 @@ class ScoringEngine:
 
     def calculate_all_scores(
         self,
-        period_start: date,
-        period_end: date,
+        repo_id: int | None = None,
+        period_start: date | None = None,
+        period_end: date | None = None,
     ) -> list[ScoreSnapshot]:
-        """Calculate scores for all active, non-bot developers."""
-        devs = (
+        """Calculate scores for active, non-bot developers in a repo or global scope."""
+        # Backward compatibility for old calls:
+        # calculate_all_scores(period_start, period_end)
+        if isinstance(repo_id, date) and isinstance(period_start, date) and period_end is None:
+            period_end = period_start
+            period_start = repo_id
+            repo_id = None
+
+        if period_start is None or period_end is None:
+            raise ValueError("period_start and period_end are required")
+
+        repo = None
+        if repo_id is not None:
+            repo = self.db.get(Repository, repo_id)
+            if not repo:
+                raise ValueError(f"Repository #{repo_id} not found")
+
+        start_dt, end_dt = self._period_bounds(period_start, period_end)
+        dev_query = (
             self.db.query(Developer)
-            .filter_by(is_active=True, is_bot=False)
-            .all()
+            .join(Commit, Commit.author_id == Developer.id)
+            .filter(
+                Developer.is_active == True,
+                Developer.is_bot == False,
+                Commit.committed_at >= start_dt,
+                Commit.committed_at <= end_dt,
+            )
+            .distinct()
         )
+        if repo_id is not None:
+            dev_query = dev_query.filter(Commit.repo_id == repo_id)
+        devs = dev_query.all()
 
         snapshots = []
         for dev in devs:
-            snap = self.calculate_score(dev.id, period_start, period_end)
+            snap = self.calculate_score(dev.id, repo_id, period_start, period_end)
             if snap:
                 snapshots.append(snap)
 
-        logger.info("Calculated scores for %d developers", len(snapshots))
+        logger.info(
+            "Calculated scores for %d developers in %s",
+            len(snapshots),
+            repo.full_name if repo else "global scope",
+        )
         return snapshots

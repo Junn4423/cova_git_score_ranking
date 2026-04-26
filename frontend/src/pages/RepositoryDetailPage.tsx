@@ -8,6 +8,7 @@ import {
   ArrowLeftOutlined, CodeOutlined, BranchesOutlined,
   PullRequestOutlined, TeamOutlined, FileTextOutlined,
   CalendarOutlined, PlusOutlined, MinusOutlined, LinkOutlined,
+  PlayCircleOutlined,
 } from "@ant-design/icons";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip,
@@ -219,6 +220,15 @@ export default function RepositoryDetailPage() {
                 </Text>
               )}
             </div>
+          </Col>
+          <Col>
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              onClick={() => navigate(`/evaluations/new?repo=${encodeURIComponent(repo.full_name)}`)}
+            >
+              Danh gia repo nay
+            </Button>
           </Col>
         </Row>
 

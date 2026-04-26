@@ -12,6 +12,7 @@ import {
   TrophyOutlined,
   ExperimentOutlined,
   LogoutOutlined,
+  PlayCircleOutlined,
 } from "@ant-design/icons";
 
 import DashboardPage from "./pages/DashboardPage";
@@ -25,6 +26,9 @@ import RankingPage from "./pages/RankingPage";
 import AnalysisPage from "./pages/AnalysisPage";
 import AdminPage from "./pages/AdminPage";
 import LoginPage from "./pages/LoginPage";
+import NewEvaluationPage from "./pages/evaluations/NewEvaluationPage";
+import EvaluationProgressPage from "./pages/evaluations/EvaluationProgressPage";
+import EvaluationReportPage from "./pages/evaluations/EvaluationReportPage";
 import {
   clearStoredAuth,
   getCurrentUser,
@@ -39,6 +43,7 @@ const { Title } = Typography;
 
 const menuItems = [
   { key: "/", icon: <DashboardOutlined />, label: "Dashboard" },
+  { key: "/evaluations/new", icon: <PlayCircleOutlined />, label: "Evaluations" },
   { key: "/ranking", icon: <TrophyOutlined />, label: "Ranking" },
   { key: "/developers", icon: <TeamOutlined />, label: "Developers" },
   { key: "/repositories", icon: <CodeOutlined />, label: "Repositories" },
@@ -61,7 +66,9 @@ function AppLayout({ currentUser, onLogout }: AppLayoutProps) {
   const canAccessAdmin = currentUser.role === "admin" || currentUser.role === "lead";
 
   const visibleMenuItems = useMemo(
-    () => menuItems.filter((item) => (item.key === "/admin" ? canAccessAdmin : true)),
+    () => menuItems.filter((item) => (
+      item.key === "/admin" || item.key === "/evaluations/new" ? canAccessAdmin : true
+    )),
     [canAccessAdmin]
   );
 
@@ -69,6 +76,7 @@ function AppLayout({ currentUser, onLogout }: AppLayoutProps) {
   const getSelectedKey = () => {
     const path = location.pathname;
     if (path.startsWith("/ranking")) return "/ranking";
+    if (path.startsWith("/evaluations")) return "/evaluations/new";
     if (path.startsWith("/developers")) return "/developers";
     if (path.startsWith("/repositories")) return "/repositories";
     if (path.startsWith("/work-items")) return "/work-items";
@@ -152,6 +160,12 @@ function AppLayout({ currentUser, onLogout }: AppLayoutProps) {
         >
           <Routes>
             <Route path="/" element={<DashboardPage />} />
+            <Route
+              path="/evaluations/new"
+              element={canAccessAdmin ? <NewEvaluationPage /> : <Navigate to="/" replace />}
+            />
+            <Route path="/evaluations/:id/report" element={<EvaluationReportPage />} />
+            <Route path="/evaluations/:id" element={<EvaluationProgressPage />} />
             <Route path="/ranking" element={<RankingPage />} />
             <Route path="/developers" element={<DevelopersPage />} />
             <Route path="/developers/:id" element={<DeveloperDetailPage />} />

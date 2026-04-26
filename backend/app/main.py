@@ -17,6 +17,7 @@ from app.api.work_items import router as work_items_router
 from app.api.scores import router as scores_router
 from app.api.analysis import router as analysis_router
 from app.api.admin import router as admin_router
+from app.api.evaluations import router as evaluations_router
 
 app = FastAPI(
     title="Engineering Contribution Analytics",
@@ -45,3 +46,4 @@ app.include_router(work_items_router)
 app.include_router(scores_router)
 app.include_router(analysis_router)
 app.include_router(admin_router)
+app.include_router(evaluations_router)

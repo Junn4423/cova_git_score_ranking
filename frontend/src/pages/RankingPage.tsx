@@ -1,25 +1,31 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
-  Card, Table, Typography, Space, Tag, Spin, Select, Avatar,
-  Tooltip, Button, message, Progress, Alert,
+  Alert, Avatar, Button, Card, Progress, Select, Space, Spin, Table,
+  Tag, Tooltip, Typography, message,
 } from "antd";
 import {
   TrophyOutlined, ThunderboltOutlined, SafetyCertificateOutlined,
-  RocketOutlined, SyncOutlined,
-  StarOutlined, LikeOutlined, DislikeOutlined,
+  RocketOutlined, SyncOutlined, LikeOutlined, DislikeOutlined,
 } from "@ant-design/icons";
-import {
-  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
-  ResponsiveContainer, Tooltip as ReTooltip,
-} from "recharts";
-import { getRanking, calculateScores } from "../api/client";
+import { calculateScores, getRanking, getRepositories, getStoredUser } from "../api/client";
 
 const { Title, Text } = Typography;
+
+interface Repo {
+  id: number;
+  full_name: string;
+  name: string;
+}
 
 interface RankedDev {
   rank: number;
   developer_id: number;
+  repo_id: number | null;
+  repo_full_name: string | null;
+  scope: string;
+  period_start: string;
+  period_end: string;
   github_login: string;
   display_name: string;
   avatar_url: string;
@@ -33,30 +39,93 @@ interface RankedDev {
   calculated_at: string;
 }
 
-const MEDAL = ["🥇", "🥈", "🥉"];
+const parseRepoId = (value: string | null) => {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
 
 export default function RankingPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [repoId, setRepoId] = useState<number | undefined>(
+    parseRepoId(searchParams.get("repo_id"))
+  );
   const [ranking, setRanking] = useState<RankedDev[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [reposLoading, setReposLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
   const [days, setDays] = useState(90);
+  const currentUser = getStoredUser();
+  const canCalculate = currentUser?.role === "admin" || currentUser?.role === "lead";
 
-  const fetchRanking = () => {
+  const selectedRepo = useMemo(
+    () => repos.find((repo) => repo.id === repoId),
+    [repos, repoId]
+  );
+
+  useEffect(() => {
+    setReposLoading(true);
+    getRepositories()
+      .then((res) => setRepos(res.data))
+      .catch((err) => {
+        message.error("Khong tai duoc danh sach repository");
+        console.error(err);
+      })
+      .finally(() => setReposLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const nextRepoId = parseRepoId(searchParams.get("repo_id"));
+    setRepoId(nextRepoId);
+  }, [searchParams]);
+
+  const fetchRanking = (currentRepoId: number | undefined) => {
+    if (!currentRepoId) {
+      setRanking([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
-    getRanking({ period_days: days, limit: 50 })
-      .then((r) => setRanking(r.data))
+    getRanking({ repo_id: currentRepoId, period_days: days, limit: 50 })
+      .then((res) => setRanking(res.data))
+      .catch((err) => {
+        message.error("Khong tai duoc ranking");
+        console.error(err);
+      })
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchRanking(); }, [days]);
+  useEffect(() => {
+    fetchRanking(repoId);
+  }, [repoId, days]);
+
+  const handleRepoChange = (value?: number) => {
+    setRepoId(value);
+    if (value) {
+      setSearchParams({ repo_id: String(value) });
+    } else {
+      setSearchParams({});
+    }
+  };
 
   const handleCalc = async () => {
+    if (!repoId) {
+      message.warning("Hay chon repository truoc khi tinh diem");
+      return;
+    }
+    if (!canCalculate) {
+      message.error("Chi admin hoac lead moi duoc tinh diem");
+      return;
+    }
+
     setCalculating(true);
     try {
-      const res = await calculateScores({ period_days: days });
+      const res = await calculateScores({ repo_id: repoId, period_days: days });
       message.success(res.data.message);
-      fetchRanking();
+      fetchRanking(repoId);
     } catch (err: any) {
       message.error("Scoring failed: " + (err.response?.data?.detail || err.message));
     } finally {
@@ -75,24 +144,24 @@ export default function RankingPage() {
     {
       title: "Rank",
       key: "rank",
-      width: 60,
-      render: (_: any, r: RankedDev) => (
-        <span style={{ fontSize: r.rank <= 3 ? 22 : 16, fontWeight: 700 }}>
-          {r.rank <= 3 ? MEDAL[r.rank - 1] : `#${r.rank}`}
-        </span>
+      width: 70,
+      render: (_: any, row: RankedDev) => (
+        <Tag color={row.rank <= 3 ? "gold" : "default"} style={{ fontWeight: 700 }}>
+          #{row.rank}
+        </Tag>
       ),
     },
     {
       title: "Developer",
       key: "dev",
-      render: (_: any, r: RankedDev) => (
+      render: (_: any, row: RankedDev) => (
         <Space>
-          <Avatar src={r.avatar_url} size={36}>{(r.github_login || "?")[0]}</Avatar>
+          <Avatar src={row.avatar_url} size={36}>{(row.github_login || "?")[0]}</Avatar>
           <div>
             <div style={{ fontWeight: 600, fontSize: 14 }}>
-              {r.display_name || r.github_login}
+              {row.display_name || row.github_login}
             </div>
-            <Text type="secondary" style={{ fontSize: 12 }}>@{r.github_login}</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>@{row.github_login}</Text>
           </div>
         </Space>
       ),
@@ -103,17 +172,19 @@ export default function RankingPage() {
       key: "score",
       width: 140,
       sorter: (a: RankedDev, b: RankedDev) => a.final_score - b.final_score,
-      render: (v: number) => (
+      render: (value: number) => (
         <Space>
           <Progress
             type="circle"
-            percent={v}
+            percent={Math.round(value)}
             size={40}
-            strokeColor={getScoreColor(v)}
-            format={(p) => <span style={{ fontSize: 11, fontWeight: 700 }}>{p?.toFixed(0)}</span>}
+            strokeColor={getScoreColor(value)}
+            format={(percent) => (
+              <span style={{ fontSize: 11, fontWeight: 700 }}>{percent}</span>
+            )}
           />
-          <Text strong style={{ fontSize: 16, color: getScoreColor(v) }}>
-            {v.toFixed(1)}
+          <Text strong style={{ fontSize: 16, color: getScoreColor(value) }}>
+            {value.toFixed(1)}
           </Text>
         </Space>
       ),
@@ -122,10 +193,10 @@ export default function RankingPage() {
       title: <Tooltip title="Activity (15%)"><ThunderboltOutlined /> Activity</Tooltip>,
       dataIndex: "activity_score",
       key: "activity",
-      width: 90,
-      render: (v: number) => (
-        <Tag color={v >= 50 ? "green" : v >= 20 ? "blue" : "default"}>
-          {v.toFixed(0)}
+      width: 100,
+      render: (value: number) => (
+        <Tag color={value >= 50 ? "green" : value >= 20 ? "blue" : "default"}>
+          {value.toFixed(0)}
         </Tag>
       ),
     },
@@ -133,10 +204,10 @@ export default function RankingPage() {
       title: <Tooltip title="Quality (50%)"><SafetyCertificateOutlined /> Quality</Tooltip>,
       dataIndex: "quality_score",
       key: "quality",
-      width: 90,
-      render: (v: number) => (
-        <Tag color={v >= 70 ? "green" : v >= 40 ? "blue" : "orange"}>
-          {v.toFixed(0)}
+      width: 100,
+      render: (value: number) => (
+        <Tag color={value >= 70 ? "green" : value >= 40 ? "blue" : "orange"}>
+          {value.toFixed(0)}
         </Tag>
       ),
     },
@@ -144,10 +215,10 @@ export default function RankingPage() {
       title: <Tooltip title="Impact (35%)"><RocketOutlined /> Impact</Tooltip>,
       dataIndex: "impact_score",
       key: "impact",
-      width: 90,
-      render: (v: number) => (
-        <Tag color={v >= 70 ? "green" : v >= 30 ? "blue" : "orange"}>
-          {v.toFixed(0)}
+      width: 100,
+      render: (value: number) => (
+        <Tag color={value >= 70 ? "green" : value >= 30 ? "blue" : "orange"}>
+          {value.toFixed(0)}
         </Tag>
       ),
     },
@@ -155,29 +226,29 @@ export default function RankingPage() {
       title: "Confidence",
       dataIndex: "confidence",
       key: "confidence",
-      width: 100,
-      render: (v: number) => (
+      width: 120,
+      render: (value: number) => (
         <Progress
-          percent={Math.round(v * 100)}
+          percent={Math.round(value * 100)}
           size="small"
-          strokeColor={v >= 0.5 ? "#1677ff" : "#faad14"}
-          format={(p) => `${p}%`}
+          strokeColor={value >= 0.5 ? "#1677ff" : "#faad14"}
+          format={(percent) => `${percent}%`}
         />
       ),
     },
     {
       title: "Highlights",
       key: "highlights",
-      width: 250,
-      render: (_: any, r: RankedDev) => (
+      width: 260,
+      render: (_: any, row: RankedDev) => (
         <Space direction="vertical" size={2}>
-          {(r.top_positive_reasons || []).slice(0, 1).map((reason, i) => (
-            <Text key={`p${i}`} style={{ fontSize: 11, color: "#52c41a" }}>
+          {(row.top_positive_reasons || []).slice(0, 1).map((reason, index) => (
+            <Text key={`p${index}`} style={{ fontSize: 11, color: "#52c41a" }}>
               <LikeOutlined /> {reason}
             </Text>
           ))}
-          {(r.top_negative_reasons || []).slice(0, 1).map((reason, i) => (
-            <Text key={`n${i}`} style={{ fontSize: 11, color: "#faad14" }}>
+          {(row.top_negative_reasons || []).slice(0, 1).map((reason, index) => (
+            <Text key={`n${index}`} style={{ fontSize: 11, color: "#faad14" }}>
               <DislikeOutlined /> {reason}
             </Text>
           ))}
@@ -186,32 +257,48 @@ export default function RankingPage() {
     },
   ];
 
-  if (loading && ranking.length === 0) {
-    return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" /></div>;
-  }
-
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 20,
+          gap: 16,
+          flexWrap: "wrap",
+        }}
+      >
         <div>
           <Title level={3} style={{ margin: 0 }}>
             <TrophyOutlined style={{ marginRight: 8, color: "#faad14" }} />
-            Developer Ranking
+            {selectedRepo ? `Ranking trong repo ${selectedRepo.full_name}` : "Chon repo de xem ranking"}
           </Title>
           <Text type="secondary">
             Contribution Score = 15% Activity + 50% Quality + 35% Impact
           </Text>
         </div>
-        <Space>
+        <Space wrap>
+          <Select
+            allowClear
+            showSearch
+            loading={reposLoading}
+            value={repoId}
+            onChange={handleRepoChange}
+            placeholder="Chon repository"
+            optionFilterProp="label"
+            style={{ width: 280 }}
+            options={repos.map((repo) => ({ label: repo.full_name, value: repo.id }))}
+          />
           <Select
             value={days}
             onChange={setDays}
             style={{ width: 130 }}
             options={[
-              { label: "7 ngày", value: 7 },
-              { label: "30 ngày", value: 30 },
-              { label: "90 ngày", value: 90 },
-              { label: "180 ngày", value: 180 },
+              { label: "7 ngay", value: 7 },
+              { label: "30 ngay", value: 30 },
+              { label: "90 ngay", value: 90 },
+              { label: "180 ngay", value: 180 },
             ]}
           />
           <Button
@@ -219,67 +306,51 @@ export default function RankingPage() {
             icon={<SyncOutlined />}
             onClick={handleCalc}
             loading={calculating}
+            disabled={!repoId || !canCalculate}
           >
             Calculate Scores
           </Button>
         </Space>
       </div>
 
-      {ranking.length === 0 && (
+      {!repoId && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Can chon repository"
+          description="Ranking theo roadmap moi phai tinh trong mot repo cu the. Hay chon repo hoac mo /ranking?repo_id=ID."
+          style={{ marginBottom: 24 }}
+        />
+      )}
+
+      {repoId && ranking.length === 0 && !loading && (
         <Alert
           type="info"
           showIcon
-          message="Chưa có dữ liệu scoring"
-          description="Bấm 'Calculate Scores' để tính điểm cho tất cả developers."
+          message={`Chua co du lieu scoring cho ${selectedRepo?.full_name || "repo nay"}`}
+          description="Bam Calculate Scores de tinh diem trong dung repo dang chon."
           style={{ marginBottom: 24 }}
         />
-      )}
-
-      {/* Radar chart for top 3 */}
-      {ranking.length >= 2 && (
-        <Card
-          title={<Space><StarOutlined style={{ color: "#faad14" }} /> Top Contributors Radar</Space>}
-          style={{ marginBottom: 24 }}
-        >
-          <ResponsiveContainer width="100%" height={300}>
-            <RadarChart data={[
-              { metric: "Activity", ...Object.fromEntries(ranking.slice(0, 3).map((r) => [r.github_login, r.activity_score])) },
-              { metric: "Quality", ...Object.fromEntries(ranking.slice(0, 3).map((r) => [r.github_login, r.quality_score])) },
-              { metric: "Impact", ...Object.fromEntries(ranking.slice(0, 3).map((r) => [r.github_login, r.impact_score])) },
-              { metric: "Final", ...Object.fromEntries(ranking.slice(0, 3).map((r) => [r.github_login, r.final_score])) },
-            ]}>
-              <PolarGrid />
-              <PolarAngleAxis dataKey="metric" tick={{ fontSize: 12 }} />
-              <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
-              {ranking.slice(0, 3).map((r, i) => (
-                <Radar
-                  key={r.developer_id}
-                  name={r.github_login}
-                  dataKey={r.github_login}
-                  stroke={["#1677ff", "#722ed1", "#13c2c2"][i]}
-                  fill={["#1677ff", "#722ed1", "#13c2c2"][i]}
-                  fillOpacity={0.15}
-                  strokeWidth={2}
-                />
-              ))}
-              <ReTooltip />
-            </RadarChart>
-          </ResponsiveContainer>
-        </Card>
       )}
 
       <Card>
-        <Table
-          dataSource={ranking}
-          columns={columns}
-          rowKey="developer_id"
-          size="middle"
-          pagination={{ pageSize: 20 }}
-          onRow={(r) => ({
-            onClick: () => navigate(`/developers/${r.developer_id}`),
-            style: { cursor: "pointer" },
-          })}
-        />
+        {loading ? (
+          <div style={{ textAlign: "center", padding: 80 }}>
+            <Spin size="large" />
+          </div>
+        ) : (
+          <Table
+            dataSource={ranking}
+            columns={columns}
+            rowKey={(row) => `${row.repo_id}-${row.developer_id}`}
+            size="middle"
+            pagination={{ pageSize: 20 }}
+            onRow={(row) => ({
+              onClick: () => navigate(`/developers/${row.developer_id}?repo_id=${repoId}`),
+              style: { cursor: "pointer" },
+            })}
+          />
+        )}
       </Card>
     </div>
   );
