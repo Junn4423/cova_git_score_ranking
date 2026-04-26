@@ -3,13 +3,23 @@ GitHub API client using httpx.
 Handles: repos, commits, pull requests, reviews, diffs.
 """
 
-import httpx
 from typing import Optional
+
+import httpx
 
 from app.core.config import settings
 
 GITHUB_API = "https://api.github.com"
 PER_PAGE = 100
+
+
+class GitHubRateLimitError(Exception):
+    """Raised when GitHub rate limits or abuse limits the current request."""
+
+    def __init__(self, message: str, reset_at: str | None = None, retry_after: str | None = None):
+        super().__init__(message)
+        self.reset_at = reset_at
+        self.retry_after = retry_after
 
 
 class GitHubClient:
@@ -33,6 +43,27 @@ class GitHubClient:
 
     def _get(self, path: str, params: dict | None = None) -> dict | list:
         resp = self._client.get(path, params=params)
+
+        if resp.status_code in (403, 429):
+            body = (resp.text or "").lower()
+            remaining = resp.headers.get("x-ratelimit-remaining")
+            reset_at = resp.headers.get("x-ratelimit-reset")
+            retry_after = resp.headers.get("retry-after")
+            rate_limited = (
+                remaining == "0"
+                or resp.status_code == 429
+                or "rate limit" in body
+                or "secondary rate limit" in body
+                or "too many requests" in body
+                or "abuse detection" in body
+            )
+            if rate_limited:
+                raise GitHubRateLimitError(
+                    "GitHub rate limit exceeded. Configure a GITHUB_TOKEN with repo read access, reduce pages, or retry later.",
+                    reset_at=reset_at,
+                    retry_after=retry_after,
+                )
+
         resp.raise_for_status()
         return resp.json()
 
