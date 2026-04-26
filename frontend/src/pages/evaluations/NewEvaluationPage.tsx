@@ -9,6 +9,13 @@ import { createEvaluation } from "../../api/client";
 
 const { Title, Text } = Typography;
 
+function extractErrorMessage(err: any): string {
+  const detail = err.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (detail) return JSON.stringify(detail);
+  return err.message || "Evaluation failed";
+}
+
 export default function NewEvaluationPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -23,8 +30,9 @@ export default function NewEvaluationPage() {
       navigate(`/evaluations/${res.data.evaluation_run_id}`);
     } catch (err: any) {
       message.error({
-        content: err.response?.data?.detail || err.message || "Evaluation failed",
+        content: extractErrorMessage(err),
         key: "evaluation",
+        duration: 8,
       });
     } finally {
       setSubmitting(false);
@@ -41,8 +49,8 @@ export default function NewEvaluationPage() {
       <Alert
         type="info"
         showIcon
-        message="Evaluation hien chay dong bo"
-        description="Request co the mat vai phut voi repo lon. Phase sau co the tach worker/background job neu can."
+        message="Evaluation mac dinh chay che do nhe"
+        description="Mac dinh chi lay 1 page commit/PR va khong fetch file detail de tranh GitHub rate limit. Chi bat fetch file detail khi can phan tich sau hon va da cau hinh GITHUB_TOKEN."
         style={{ marginBottom: 24 }}
       />
 
@@ -52,9 +60,10 @@ export default function NewEvaluationPage() {
           onFinish={handleSubmit}
           initialValues={{
             repo_url: searchParams.get("repo") || "",
-            period_days: 90,
-            max_commit_pages: 5,
-            max_pr_pages: 5,
+            period_days: 30,
+            max_commit_pages: 1,
+            max_pr_pages: 1,
+            fetch_files: false,
             run_analysis: true,
             force_resync: false,
           }}
@@ -81,13 +90,16 @@ export default function NewEvaluationPage() {
               />
             </Form.Item>
             <Form.Item label="Commit pages" name="max_commit_pages">
-              <InputNumber min={1} max={50} style={{ width: 130 }} />
+              <InputNumber min={1} max={10} style={{ width: 130 }} />
             </Form.Item>
             <Form.Item label="PR pages" name="max_pr_pages">
-              <InputNumber min={1} max={50} style={{ width: 130 }} />
+              <InputNumber min={0} max={10} style={{ width: 130 }} />
             </Form.Item>
           </Space>
 
+          <Form.Item name="fetch_files" valuePropName="checked">
+            <Checkbox>Fetch file detail/diff tung commit (ton nhieu GitHub request)</Checkbox>
+          </Form.Item>
           <Form.Item name="run_analysis" valuePropName="checked">
             <Checkbox>Chay rule-based analysis</Checkbox>
           </Form.Item>
