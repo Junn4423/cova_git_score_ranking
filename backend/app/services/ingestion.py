@@ -11,7 +11,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.github.client import GitHubClient
+from app.github.client import GitHubClient, GitHubRateLimitError
 from app.models.models import (
     Repository, Developer, DeveloperAlias,
     Commit, CommitFile, PullRequest, PullRequestCommit, Review,
@@ -177,6 +177,7 @@ class IngestionService:
             repo.full_name, since=since, max_pages=max_pages,
         )
         new_count = 0
+        detail_fetch_disabled = False
         for gc in gh_commits:
             sha = gc["sha"]
             # skip if already exists
@@ -233,8 +234,10 @@ class IngestionService:
             self.db.add(c)
             self.db.flush()
 
-            # Fetch detailed commit to get file info and stats
-            if fetch_files:
+            # Fetch detailed commit to get file info and stats.
+            # If GitHub rate limits this expensive detail endpoint, stop detail fetching
+            # for the remaining commits instead of spamming 403/429 requests.
+            if fetch_files and not detail_fetch_disabled:
                 try:
                     detail = self.gh.get_commit(repo.full_name, sha)
                     stats = detail.get("stats", {})
@@ -256,6 +259,14 @@ class IngestionService:
                             is_lockfile=self._is_lockfile(fname),
                         )
                         self.db.add(cf)
+                except GitHubRateLimitError as e:
+                    detail_fetch_disabled = True
+                    logger.warning(
+                        "GitHub rate limit hit while fetching commit details for %s. "
+                        "Disabling detail fetch for remaining commits: %s",
+                        repo.full_name,
+                        e,
+                    )
                 except Exception as e:
                     logger.warning("Failed to fetch detail for %s: %s", sha[:7], e)
 
@@ -283,6 +294,7 @@ class IngestionService:
             repo.full_name, state=state, max_pages=max_pages,
         )
         new_count = 0
+        pr_detail_fetch_disabled = False
         for gp in gh_prs:
             pr_number = gp["number"]
             pr = (
@@ -338,32 +350,50 @@ class IngestionService:
             self.db.flush()
 
             # Link PR ↔ commits
-            try:
-                pr_commits = self.gh.list_pr_commits(repo.full_name, pr_number)
-                for pc in pr_commits:
-                    commit = (
-                        self.db.query(Commit)
-                        .filter_by(repo_id=repo.id, sha=pc["sha"])
-                        .first()
-                    )
-                    if commit:
-                        exists = (
-                            self.db.query(PullRequestCommit)
-                            .filter_by(pull_request_id=pr.id, commit_id=commit.id)
+            if not pr_detail_fetch_disabled:
+                try:
+                    pr_commits = self.gh.list_pr_commits(repo.full_name, pr_number)
+                    for pc in pr_commits:
+                        commit = (
+                            self.db.query(Commit)
+                            .filter_by(repo_id=repo.id, sha=pc["sha"])
                             .first()
                         )
-                        if not exists:
-                            self.db.add(PullRequestCommit(
-                                pull_request_id=pr.id,
-                                commit_id=commit.id,
-                            ))
-            except Exception as e:
-                logger.warning("Failed to sync PR commits for PR #%d: %s", pr_number, e)
+                        if commit:
+                            exists = (
+                                self.db.query(PullRequestCommit)
+                                .filter_by(pull_request_id=pr.id, commit_id=commit.id)
+                                .first()
+                            )
+                            if not exists:
+                                self.db.add(PullRequestCommit(
+                                    pull_request_id=pr.id, commit_id=commit.id,
+                                ))
+                except GitHubRateLimitError as e:
+                    pr_detail_fetch_disabled = True
+                    sync_reviews = False
+                    logger.warning(
+                        "GitHub rate limit hit while fetching PR details for %s. "
+                        "Disabling PR commit/review detail fetch for remaining PRs: %s",
+                        repo.full_name,
+                        e,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to sync PR commits for PR #%d: %s", pr_number, e)
 
             # Sync reviews
-            if sync_reviews:
+            if sync_reviews and not pr_detail_fetch_disabled:
                 try:
                     self._sync_reviews_for_pr(repo, pr)
+                except GitHubRateLimitError as e:
+                    pr_detail_fetch_disabled = True
+                    sync_reviews = False
+                    logger.warning(
+                        "GitHub rate limit hit while syncing reviews for %s. "
+                        "Disabling review sync for remaining PRs: %s",
+                        repo.full_name,
+                        e,
+                    )
                 except Exception as e:
                     logger.warning("Failed to sync reviews for PR #%d: %s", pr_number, e)
 
@@ -438,9 +468,19 @@ class IngestionService:
         new_commits = self.sync_commits(
             repo, since=since, max_pages=max_commit_pages, fetch_files=fetch_files,
         )
-        new_prs = self.sync_pull_requests(
-            repo, max_pages=max_pr_pages, sync_reviews=True,
-        )
+        new_prs = 0
+        if max_pr_pages > 0:
+            try:
+                new_prs = self.sync_pull_requests(
+                    repo, max_pages=max_pr_pages, sync_reviews=True,
+                )
+            except GitHubRateLimitError as e:
+                logger.warning(
+                    "GitHub rate limit hit while listing PRs for %s. "
+                    "Continuing evaluation with commit data only: %s",
+                    repo.full_name,
+                    e,
+                )
         return {
             "repo": repo.full_name,
             "new_commits": new_commits,
