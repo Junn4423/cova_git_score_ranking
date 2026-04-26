@@ -174,6 +174,7 @@ export const createEvaluation = (data: {
   period_days?: number;
   max_commit_pages?: number;
   max_pr_pages?: number;
+  fetch_files?: boolean;
   run_analysis?: boolean;
   force_resync?: boolean;
 }) => api.post("/api/evaluations", data);
