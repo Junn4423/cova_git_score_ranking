@@ -4,7 +4,7 @@ Evaluation API endpoints.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -21,9 +21,10 @@ router = APIRouter(prefix="/api/evaluations", tags=["Evaluations"])
 
 class CreateEvaluationRequest(BaseModel):
     repo_url: str = Field(min_length=3, max_length=500)
-    period_days: int = Field(default=90, ge=1, le=365)
-    max_commit_pages: int = Field(default=5, ge=1, le=50)
-    max_pr_pages: int = Field(default=5, ge=1, le=50)
+    period_days: int = Field(default=30, ge=1, le=365)
+    max_commit_pages: int = Field(default=1, ge=1, le=10)
+    max_pr_pages: int = Field(default=1, ge=0, le=10)
+    fetch_files: bool = False
     run_analysis: bool = True
     force_resync: bool = False
 
@@ -42,6 +43,7 @@ def create_evaluation(
             period_days=req.period_days,
             max_commit_pages=req.max_commit_pages,
             max_pr_pages=req.max_pr_pages,
+            fetch_files=req.fetch_files,
             run_analysis=req.run_analysis,
             force_resync=req.force_resync,
             requested_by=current_user,
@@ -64,10 +66,13 @@ def create_evaluation(
             "evaluation": service.serialize_run(run),
         }
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Evaluation failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Evaluation failed unexpectedly. Check backend logs for details.",
+        ) from exc
 
 
 @router.get("")
@@ -115,4 +120,4 @@ def get_evaluation_report(
     try:
         return service.get_report(evaluation_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
